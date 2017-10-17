@@ -1,11 +1,12 @@
 import akka.http.scaladsl.model.StatusCodes
+import akka.http.scaladsl.server.MissingHeaderRejection
 import akka.http.scaladsl.testkit.ScalatestRouteTest
 import controllers.BookController
 import helpers.BookSpecHelper
-import models.{Book, BookJson}
+import models.{Book, BookJson, BookSearch, User}
 import org.scalatest.{AsyncWordSpec, BeforeAndAfterAll, MustMatchers}
-import repository.{BookRepository, CategoryRepository}
-import services.{ConfigService, FlywayService, PostgresService}
+import repository.{BookRepository, CategoryRepository, UserRepository}
+import services.{ConfigService, FlywayService, PostgresService, TokenService}
 
 import scala.concurrent.ExecutionContextExecutor
 
@@ -32,7 +33,9 @@ class BookEndpointSpec extends AsyncWordSpec
 
   val bookSpecHelper = new BookSpecHelper(categoryRepository)(bookRepository)
 
-  val bookController = new BookController(bookRepository)
+  val userRepository = new UserRepository(databaseService)
+  val tokenService = new TokenService(userRepository)
+  val bookController = new BookController(bookRepository, tokenService)
 
   override def beforeAll: Unit = {
     flywayService.migrateDatabase
@@ -105,6 +108,44 @@ class BookEndpointSpec extends AsyncWordSpec
 
         books must have size 1
       }
+    }
+
+    "reject the request when there is no token in the request" in {
+      Get("/books/123123") ~> bookController.routes ~> check {
+        rejection mustBe MissingHeaderRejection("Authorization")
+      }
+    }
+
+    "return `Unauthorized` when there is an invalid token in the request" in {
+      val invalidUser = User(Some(123123), "Name", "Email", "password")
+
+      val invalidToken = tokenService.createToken(invalidUser)
+
+      Get("/books/123123") ~> addHeader("Authorization", invalidToken) ~> bookController.routes ~> check {
+        status mustBe StatusCodes.Unauthorized
+      }
+    }
+
+    "return the book information when the token is valid" in {
+      def assertion(token: String, bookId: Long) = {
+        Get(s"/books/$bookId") ~> addHeader("Authorization", token) ~> bookController.routes ~> check {
+          val book = responseAs[Book]
+
+          book.title mustBe "Akka in Action"
+          book.author mustBe "Raymond Roestenburg, Rob Bakker, and Rob Williams"
+        }
+      }
+
+      val user = User(None, "Name", "test@test.com", "password")
+
+      val bookSearch = BookSearch(Some("Akka in Action"))
+
+      for {
+        storedUser ← userRepository.create(user)
+        books ← bookRepository.search(bookSearch)
+        result ← assertion(tokenService.createToken(storedUser), books.head.id.get)
+        _ ← userRepository.delete(storedUser.id.get)
+      } yield result
     }
   }
 }

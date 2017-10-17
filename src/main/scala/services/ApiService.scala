@@ -11,11 +11,12 @@ import scala.concurrent.ExecutionContext
   * Description...
   *
   */
-class ApiService(categoryRepository: CategoryRepository, bookRepository: BookRepository)(implicit executor: ExecutionContext) {
+class ApiService(categoryRepository: CategoryRepository, bookRepository: BookRepository,
+                 tokenService: TokenService)(implicit executor: ExecutionContext) {
 
   val categoryController = new CategoryController(categoryRepository)
 
-  val bookController = new BookController(bookRepository)
+  val bookController = new BookController(bookRepository, tokenService)
 
   def routes =
     pathPrefix("api") {
